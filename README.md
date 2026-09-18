@@ -73,7 +73,27 @@ node src/cli/index.ts unconfigure zcode   # 从备份精确还原 zcode 设置
 ```bash
 node src/cli/index.ts rules     # 查看已加载的规则
 node src/cli/index.ts doctor    # 自检环境（规则 / CA / 设置）
+node src/cli/index.ts watch     # 只跑绕过检测（见下）
 ```
+
+> `run` 会**同时启动绕过检测**——因为「代理在跑」不等于「拦截一定有效」。
+
+### 绕过检测（重要）
+
+本工具是**应用层**控制，依赖客户端把流量交给代理。存在一类绕过路径：
+对象上传走 `globalThis.fetch`（不经代理），且上传目标域由服务端**动态下发**，
+因此无法预先在网络层瞄准。
+
+所以 ASTI 自带检测层：监控客户端的 checkpoint 状态，一旦
+`lastAcceptedManifestHash` 变化——意味着**有快照被服务端接受了**——立即告警。
+
+```bash
+node src/cli/index.ts watch          # 持续监控（默认每 30s）
+node src/cli/index.ts watch --once   # 单次检查：有绕过时 exit 1（适合定时任务）
+node src/cli/index.ts watch --interval 60 --checkpoints <dir> --state <file>
+```
+
+基线持久化在 `~/.asti/watch-state.json`，因此**能检出停机期间发生的绕过**。
 
 ### 验证拦截生效
 

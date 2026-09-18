@@ -9,9 +9,12 @@ import { RulesEngine } from "../rules/engine.ts";
 import { loadRulePack } from "../rules/load.ts";
 import { ProxyServer } from "../proxy/server.ts";
 import { ZcodeAdapter } from "../adapters/explicit/zcode.ts";
+import { CheckpointWatcher, formatAlert } from "../watch/watcher.ts";
+import { defaultCheckpointsRoot } from "../watch/checkpoints.ts";
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_RULEPACK = "rulepacks/zcode.yaml";
+const DEFAULT_WATCH_INTERVAL_SEC = 30;
 
 function dataDir(): string {
   return process.env["ASTI_HOME"] ?? join(homedir(), ".asti");
@@ -28,7 +31,8 @@ function usage(): string {
     "用法: asti <command> [options]",
     "",
     "命令:",
-    "  run                    启动本地代理（前台）",
+    "  run                    启动本地代理（前台，含绕过检测）",
+    "  watch                  只跑绕过检测（拦截是否失效）",
     "  configure <client>     接入客户端（当前支持 zcode）",
     "  unconfigure <client>   断开客户端并还原设置",
     "  rules                  列出已加载规则",
@@ -38,6 +42,9 @@ function usage(): string {
     "  --port <n>             代理端口（默认 8787）",
     "  --rulepack <path>      规则包路径（默认 rulepacks/zcode.yaml）",
     "  --settings <path>      zcode setting.json 路径（默认自动探测）",
+    "  --checkpoints <dir>    checkpoints 目录（默认 ~/.zcode/v2/checkpoints）",
+    "  --interval <sec>       检测轮询间隔秒数（默认 30）",
+    "  --once                 检测只跑一次后退出",
   ].join("\n");
 }
 
@@ -103,7 +110,53 @@ function cmdDoctor(rulepackPath: string, settingsPath: string | undefined): void
   process.exitCode = allOk ? 0 : 1;
 }
 
-async function cmdRun(rulepackPath: string, port: number): Promise<void> {
+function makeWatcher(root: string, intervalSec: number, statePath: string): CheckpointWatcher {
+  return new CheckpointWatcher({
+    root,
+    intervalMs: intervalSec * 1000,
+    statePath,
+    onAlert: (change) => console.error(`[asti] ${formatAlert(change)}`),
+  });
+}
+
+/**
+ * 只跑检测层：监控 checkpoints，一旦有快照被服务端接受就告警。
+ * 用于「代理在别处运行」或「只想确认拦截有没有失效」的场景。
+ *
+ * 基线持久化到 `statePath`，因此 `--once` 适合放进定时任务：
+ * 它能检出「上次检查之后（含 ASTI 未运行时）发生的绕过」。
+ */
+function cmdWatch(root: string, intervalSec: number, once: boolean, statePath: string): void {
+  const watcher = makeWatcher(root, intervalSec, statePath);
+  if (once) {
+    watcher.seed();
+    const changes = watcher.poll();
+    for (const c of changes) console.error(`[asti] ${formatAlert(c)}`);
+    if (changes.length === 0) {
+      console.log(`[asti] 无新增上传（基线: ${statePath}）`);
+    } else {
+      process.exitCode = 1; // 让定时任务/CI 能感知到异常
+    }
+    return;
+  }
+  console.log(`[asti] 监控 ${root}（每 ${intervalSec}s，Ctrl+C 退出）`);
+  console.log(`[asti] 判据：lastAcceptedManifestHash 变化 = 有快照被服务端接受`);
+  watcher.start();
+  const stop = (): void => {
+    watcher.stop();
+    process.exit(0);
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+}
+
+async function cmdRun(
+  rulepackPath: string,
+  port: number,
+  checkpointsRoot: string,
+  intervalSec: number,
+  statePath: string
+): Promise<void> {
   const rules = loadRules(rulepackPath);
   const dir = dataDir();
   mkdirSync(dir, { recursive: true });
@@ -117,7 +170,13 @@ async function cmdRun(rulepackPath: string, port: number): Promise<void> {
   const actual = await proxy.start();
   console.error(`[asti] 代理已启动于 127.0.0.1:${actual}（Ctrl+C 退出）`);
 
+  // 检测层：代理在跑 ≠ 拦截一定有效，所以同时盯住「上传是否真的被接受」
+  const watcher = makeWatcher(checkpointsRoot, intervalSec, statePath);
+  watcher.start();
+  console.error(`[asti] 绕过检测已启动（监控 ${checkpointsRoot}，每 ${intervalSec}s）`);
+
   const shutdown = async (): Promise<void> => {
+    watcher.stop();
     await proxy.stop();
     process.exit(0);
   };
@@ -155,6 +214,10 @@ async function main(): Promise<void> {
       port: { type: "string" },
       rulepack: { type: "string" },
       settings: { type: "string" },
+      checkpoints: { type: "string" },
+      interval: { type: "string" },
+      state: { type: "string" },
+      once: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -162,6 +225,9 @@ async function main(): Promise<void> {
   const cmd = positionals[0];
   const rulepackPath = values.rulepack ?? DEFAULT_RULEPACK;
   const port = values.port !== undefined ? Number(values.port) : DEFAULT_PORT;
+  const checkpointsRoot = values.checkpoints ?? defaultCheckpointsRoot(homedir());
+  const intervalSec = values.interval !== undefined ? Number(values.interval) : DEFAULT_WATCH_INTERVAL_SEC;
+  const statePath = values.state ?? join(dataDir(), "watch-state.json");
 
   if (values.help === true || cmd === undefined) {
     console.log(usage());
@@ -170,7 +236,10 @@ async function main(): Promise<void> {
 
   switch (cmd) {
     case "run":
-      await cmdRun(rulepackPath, port);
+      await cmdRun(rulepackPath, port, checkpointsRoot, intervalSec, statePath);
+      break;
+    case "watch":
+      cmdWatch(checkpointsRoot, intervalSec, values.once === true, statePath);
       break;
     case "configure":
       cmdConfigure(positionals[1] ?? "", port, values.settings);
