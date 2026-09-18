@@ -128,17 +128,19 @@ node src/cli/index.ts unconfigure zcode
 
 ### 已知缺口（按重要性）
 
-1. **拦截是单点控制，存在未兜住的绕过路径**（最重要）。
-   对象上传用 `this.objectUploadFetch ?? globalThis.fetch`，而客户端构造时**没传**该选项
-   → 上传走 `globalThis.fetch`，**不经代理**（`NODE_USE_ENV_PROXY` 0 命中，
-   16 处 `globalThis.fetch=` 全为埋点包装）。且上传目标域由服务端**动态下发**，无法预判。
-   **后果**：整条防护只依赖「凭据那一步失败」；那一步若被绕过，上传直连、代理看不见。
-   **兜底**：检测层（`src/watch/`，命令 `asti watch`）——一旦 `lastAcceptedManifestHash`
-   变化即告警。它不是拦截，是**让失效可见**。要硬保证只能上更粗的手段（退出登录 / 网络层整体阻断）。
+1. ~~拦截是单点控制，存在未兜住的绕过路径~~ **已修复**。
+   原问题：对象上传用 `this.objectUploadFetch ?? globalThis.fetch`，而客户端构造时**没传**该选项
+   → 上传走 `globalThis.fetch`，默认**不经代理**。
+   **修复**：`asti launch <exe>` 注入 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY` + `NODE_EXTRA_CA_CERTS`
+   → Node 的 fetch 也走代理。A/B 对照实测已验证（经 launch → BLOCK；不经 → 绕过直连）。
+   **前提**：客户端必须**由 `asti launch` 启动**（继承环境变量）。若用户直接双击启动，
+   该路径仍会绕过 —— 此时靠检测层（`asti watch`）发现。
 2. 规则包只覆盖 zcode 的**一个**端点（快照上传凭据）；其它遥测端点未覆盖。
 3. Linux/macOS 的自启配置**已提供但未在目标平台实测**（作者只有 Windows 环境）。
 4. 代理无鉴权、无 TLS 客户端校验（仅监听 127.0.0.1，本机其它进程可访问该端口）。
 5. 无速率限制/连接数上限。
+6. Windows 上无法做真正的「进程级出口阻断」：需要管理员装防火墙规则，而防火墙规则
+   无法按域名过滤（上传目标域还是动态的）。因此路线是「环境变量注入 + 检测」，不是内核级拦截。
 
 ---
 

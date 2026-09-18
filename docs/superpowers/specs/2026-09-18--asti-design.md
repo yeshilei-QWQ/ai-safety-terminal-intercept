@@ -282,7 +282,7 @@ README 将明确声明：**仅用于保护自己的机器、拦截自己的客�
 | A4：`silent` 响应能让 zcode 静默跳过 | 原生代码验证：`verification/verify-a4-silent.mjs`（真实 `yme` 字节提取）→ 静默响应得 null、真实响应得 proceed、403 抛错，3/3 PASS | ✅ **已验证（本地）** |
 | A5：显式代理接入后模型调用不受影响 | **真机验收通过**（2026-09-18）：接入后 zcode 正常回复、无 TLS 报错；快照上传被 BLOCK；checkpoints hash 与基线一致 | ✅ **已验证（真机）** |
 | A6：`httpProxyCaCertPath` 是替换式信任根 | **真机验收发现**：单给 ASTI CA 会使真实证书域（api.deepseek.com）TLS 校验失败（MODEL_TLS_VALIDATION_FAILED）。修复：改用「系统根 + ASTI CA」合并包。回归测试 `test/ca-bundle.test.ts` 锁定 | ✅ 已修复并验证 |
-| **A7：对象上传路径未被兜住（真实局限）** | 静态分析确认：① `uploadObject` 用 `this.objectUploadFetch ?? globalThis.fetch`，而客户端构造时**未传** `objectUploadFetch`；② `globalThis.fetch` **不经代理**（`NODE_USE_ENV_PROXY` 0 命中；16 处 `globalThis.fetch=` 全为埋点包装，无代理 dispatcher）；③ 上传目标 `oss.host`/`callback.url` 由服务端**动态下发**，不可预测。**结论：拦截完全依赖「凭据那一步失败」这单一点；若它被绕过，上传走直连，代理看不见。** | ⚠️ **已知局限，未修复**（由 A8 检测层兜底） |
+| ~~A7：对象上传路径未被兜住~~ **→ 已修复** | 原局限：对象上传用 `globalThis.fetch`（不读 httpProxy），目标域服务端动态下发 → 会绕过代理直连。**修复：`asti launch` 注入 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY` + `NODE_EXTRA_CA_CERTS` 后，Node 的 fetch 也会走代理。** A/B 对照实测：经 launch → BLOCK（静默响应）；不经 launch → 绕过（打到真实服务端 404）。 | ✅ **已修复并验证** |
 | A8：检测层能在被绕过时告警 | `test/watch.test.ts`(10) + `test/watcher.test.ts`(11)；CLI 端到端：建基线 → 模拟绕过 → 检出并 exit 1 → 推进基线 → 复归 0 | ✅ 已验证 |
 
 > A4/A5 是 Phase 1 必须端到端验证的假设；在实现计划中作为独立的验证波次。

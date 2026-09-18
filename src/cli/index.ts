@@ -11,6 +11,7 @@ import { ProxyServer } from "../proxy/server.ts";
 import { ZcodeAdapter } from "../adapters/explicit/zcode.ts";
 import { CheckpointWatcher, formatAlert } from "../watch/watcher.ts";
 import { defaultCheckpointsRoot } from "../watch/checkpoints.ts";
+import { launchWithProxy } from "../launch/index.ts";
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_RULEPACK = "rulepacks/zcode.yaml";
@@ -33,6 +34,7 @@ function usage(): string {
     "命令:",
     "  run                    启动本地代理（前台，含绕过检测）",
     "  watch                  只跑绕过检测（拦截是否失效）",
+    "  launch <exe> [args]    用代理环境变量启动客户端（关闭 fetch 绕过路径）",
     "  configure <client>     接入客户端（当前支持 zcode）",
     "  unconfigure <client>   断开客户端并还原设置",
     "  rules                  列出已加载规则",
@@ -150,6 +152,30 @@ function cmdWatch(root: string, intervalSec: number, once: boolean, statePath: s
   process.on("SIGTERM", stop);
 }
 
+/**
+ * 用代理环境变量启动客户端 —— 从根上关闭绕过路径。
+ *
+ * 客户端的上传走 `globalThis.fetch`（不读 httpProxy 设置），默认会绕过本地代理；
+ * 但注入 NODE_USE_ENV_PROXY + HTTP(S)_PROXY 后，fetch 流量也会进代理（已实测）。
+ */
+function cmdLaunch(executable: string, args: string[], port: number): void {
+  if (executable.length === 0) {
+    throw new Error("用法: asti launch <可执行文件路径> [参数...]");
+  }
+  const caBundlePath = ensureCaPemFile();
+  const proxyUrl = `http://127.0.0.1:${port}`;
+  console.log(`[asti] 以代理环境启动：${executable}`);
+  console.log(`[asti]   HTTPS_PROXY=${proxyUrl}`);
+  console.log(`[asti]   NODE_USE_ENV_PROXY=1`);
+  console.log(`[asti]   NODE_EXTRA_CA_CERTS=${caBundlePath}`);
+  const child = launchWithProxy({ executable, args, proxyUrl, caBundlePath });
+  child.on("exit", (code) => process.exit(code ?? 0));
+  child.on("error", (e) => {
+    console.error(`[asti] 启动失败：${e.message}`);
+    process.exitCode = 1;
+  });
+}
+
 async function cmdRun(
   rulepackPath: string,
   port: number,
@@ -240,6 +266,9 @@ async function main(): Promise<void> {
       break;
     case "watch":
       cmdWatch(checkpointsRoot, intervalSec, values.once === true, statePath);
+      break;
+    case "launch":
+      cmdLaunch(positionals[1] ?? "", positionals.slice(2), port);
       break;
     case "configure":
       cmdConfigure(positionals[1] ?? "", port, values.settings);

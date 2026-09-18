@@ -74,7 +74,27 @@ node src/cli/index.ts unconfigure zcode   # 从备份精确还原 zcode 设置
 node src/cli/index.ts rules     # 查看已加载的规则
 node src/cli/index.ts doctor    # 自检环境（规则 / CA / 设置）
 node src/cli/index.ts watch     # 只跑绕过检测（见下）
+node src/cli/index.ts launch <客户端可执行文件>   # 用代理环境变量启动客户端（推荐）
 ```
+
+### 强烈建议：用 `asti launch` 启动客户端
+
+客户端的一部分流量（对象上传走 `globalThis.fetch`）**不读** httpProxy 设置，
+默认会绕过本地代理直连。`asti launch` 通过注入环境变量把这条路径也纳入代理：
+
+```bash
+node src/cli/index.ts launch "D:\Zcode\ZCode.exe"
+```
+
+它注入三样东西（已实测有效）：
+
+| 变量 | 作用 |
+|---|---|
+| `NODE_USE_ENV_PROXY=1` | 让 Node 的 `fetch` 遵循环境变量代理（**关键**） |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 指向本地代理 |
+| `NODE_EXTRA_CA_CERTS` | 合并 CA 包，使 MITM 证书被信任 |
+
+A/B 对照实测：经 `launch` 启动 → 请求被 BLOCK；不经 `launch` → 绕过代理直连。
 
 > `run` 会**同时启动绕过检测**——因为「代理在跑」不等于「拦截一定有效」。
 
