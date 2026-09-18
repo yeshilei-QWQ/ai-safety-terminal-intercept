@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ASTI launchd user agent (macOS).
+  __REPO__ is replaced by the absolute repo path on install
+  (see scripts/autostart/install.sh, or README "macOS (launchd)").
+  Install to ~/Library/LaunchAgents/com.asti.proxy.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.asti.proxy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/scripts/asti-run.sh</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Fail-closed: keep the proxy alive so configured clients stay reachable. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+</dict>
+</plist>

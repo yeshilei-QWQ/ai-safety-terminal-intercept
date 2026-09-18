@@ -88,7 +88,21 @@ C:\Users\<你>\.zcode\v2\checkpoints\*\state.json   →   lastAcceptedManifestHa
 **前提**：本工具是 **fail-closed** —— 代理不在时，客户端连不上服务器。
 所以若你长期保留接入，**代理必须常驻运行**。推荐配置为开机自启。
 
-### 安装（Windows，无需管理员权限）
+### 平台支持总览
+
+| 平台 | 核心功能 | 开机自启 | 自启方式 | 实测状态 |
+|---|---|---|---|---|
+| **Windows** | ✅ | ✅ 已配置 | 「启动」文件夹 + VBS 隐藏窗口 | ✅ 已实测 |
+| **Linux** | ✅ 应可用 | ✅ 提供脚本 | systemd 用户服务 | ⚠️ 脚本已提供，**未在 Linux 实测** |
+| **macOS** | ✅ 应可用 | ✅ 提供脚本 | launchd 用户代理 | ⚠️ 脚本已提供，**未在 macOS 实测** |
+
+核心代理/规则/CA/CLI 均使用 Node 跨平台 API，无平台分支；差异只在**自启机制**。
+`configure zcode` / `unconfigure zcode` 的路径用 `os.homedir()` 拼接，三平台通用。
+
+> ⚠️ 诚实说明：Linux/macOS 的自启配置已按官方机制编写，但作者当前只有 Windows 环境，
+> **未在 Linux/macOS 上真机运行过**。若你在这些平台遇到问题，欢迎提 issue。
+
+### Windows（「启动」文件夹，无需管理员权限）
 
 1. 确认系统 Node 存在（自启脚本用绝对路径，不依赖 PATH）：
    ```
@@ -120,35 +134,82 @@ C:\Users\<你>\.zcode\v2\checkpoints\*\state.json   →   lastAcceptedManifestHa
 
 3. 重启（或注销重登）验证：开机后代理应已自动运行。
 
-### 为什么不直接放 `.bat` 到启动文件夹
+### Windows：为什么不直接放 `.bat` 到启动文件夹
 
 直接放 `.cmd` 会在每次开机弹出一个黑色控制台窗口。`asti-hidden.vbs` 通过
 `WScript.Shell.Run(..., 0, False)` 以**隐藏窗口**启动，因此更干净。
 
+### Linux（systemd 用户服务）
+
+无需 root —— 装到用户级 systemd：
+
+```bash
+./scripts/autostart/install.sh
+```
+
+它会自动把模板里的 `__REPO__` 替换成本仓库绝对路径，安装到
+`~/.config/systemd/user/asti.service`，并 `enable --now`。
+
+```bash
+systemctl --user status asti.service     # 查看状态
+journalctl --user -u asti.service -f     # 查看服务日志
+tail -f ~/.asti/asti.log                 # 查看代理日志
+./scripts/autostart/install.sh --uninstall   # 卸载
+```
+
+> 提示：想让服务在你**未登录**时也运行，需 `sudo loginctl enable-linger $USER`。
+
+### macOS（launchd 用户代理）
+
+```bash
+./scripts/autostart/install.sh
+```
+
+安装到 `~/Library/LaunchAgents/com.asti.proxy.plist`（`RunAtLoad` + `KeepAlive`）。
+
+```bash
+launchctl list | grep com.asti.proxy     # 查看状态
+tail -f ~/.asti/asti.log                 # 查看代理日志
+./scripts/autostart/install.sh --uninstall   # 卸载
+```
+
 ### 文件说明
 
-| 文件 | 作用 |
-|---|---|
-| `scripts\asti-run.cmd` | 实际运行器：定位系统 Node、`cd` 到仓库、启动代理、输出日志 |
-| `scripts\asti-hidden.vbs` | 隐藏窗口启动器，由「启动」文件夹的快捷方式调用 |
+| 文件 | 平台 | 作用 |
+|---|---|---|
+| `scripts/asti-run.cmd` | Windows | 运行器：定位系统 Node、`cd` 到仓库、启动代理、写日志 |
+| `scripts/asti-hidden.vbs` | Windows | 隐藏窗口启动器，由「启动」文件夹快捷方式调用 |
+| `scripts/asti-run.sh` | Linux / macOS | 对应的 POSIX 运行器 |
+| `scripts/autostart/install.sh` | Linux / macOS | 自动检测 OS 并安装/卸载自启 |
+| `scripts/autostart/asti.service` | Linux | systemd 用户服务模板 |
+| `scripts/autostart/com.asti.proxy.plist` | macOS | launchd 用户代理模板 |
 
-### 日志与排障
+### 日志与排障（三平台通用）
 
-代理的所有输出写入：
-```
-C:\Users\<你>\.asti\asti.log
-```
+代理的所有输出写入 `~/.asti/asti.log`：
 
-检查代理是否在运行（应有 `LISTENING`）：
-```
+- Windows：`C:\Users\<你>\.asti\asti.log`
+- Linux / macOS：`/home/<你>/.asti/asti.log`、`/Users/<你>/.asti/asti.log`
+
+检查代理是否在运行（端口 `8787` 应有监听）：
+
+```bash
+# Windows
 netstat -ano | findstr :8787
+# Linux / macOS
+lsof -iTCP:8787 -sTCP:LISTEN      # 或: ss -ltnp | grep 8787
 ```
+
 日志中若出现 `EADDRINUSE`，说明已有一个代理实例在跑（通常无害）。
 
 ### 卸载自启
 
-删除「启动」文件夹里的 `ASTI.lnk` 即可（`shell:startup` 打开该文件夹）。
-若要连代理配置一并还原，再执行：
+| 平台 | 卸载方式 |
+|---|---|
+| Windows | 删掉「启动」文件夹里的 `ASTI.lnk`（`shell:startup` 打开该文件夹） |
+| Linux / macOS | `./scripts/autostart/install.sh --uninstall` |
+
+若要连代理配置一并还原，再执行（三平台通用）：
 ```
 node src/cli/index.ts unconfigure zcode
 ```
@@ -195,3 +256,10 @@ docs/         设计文档
 **Phase 2 预告**
 - 透明代理接入（OS 重定向 + 系统 CA），使不支持代理设置的客户端也能被覆盖；
 - 更多客户端规则包（Cursor / Claude Code 等的遥测端点）。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 yeshilei-QWQ
+
+> 说明：MIT 是本仓库的默认选择（最宽松、最常见）。若你希望改用 Apache-2.0 /
+> GPL-3.0 等，替换 `LICENSE` 文件并同步本节与 `package.json` 的 `license` 字段即可。

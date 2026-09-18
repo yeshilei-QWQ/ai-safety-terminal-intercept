@@ -1,0 +1,18 @@
+[Unit]
+Description=ASTI egress firewall (blocks AI-client silent snapshot uploads)
+Documentation=https://github.com/yeshilei-QWQ/ai-safety-terminal-intercept
+# Fail-closed: while this service is down, a client configured to use ASTI
+# cannot reach its server. Restart=on-failure keeps that window short.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# __REPO__ is replaced by the absolute repo path on install
+# (see scripts/autostart/install.sh, or README "Linux (systemd)").
+ExecStart=__REPO__/scripts/asti-run.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -3,6 +3,11 @@
 *.bat text eol=crlf
 *.vbs text eol=crlf
 
+# POSIX 脚本 / 配置模板必须保持 LF
+*.sh text eol=lf
+*.plist text eol=lf
+*.service text eol=lf
+
 # 其余源码/文档用 LF
 *.ts text eol=lf
 *.mjs text eol=lf

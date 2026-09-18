@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "description": "Local egress firewall that blocks silent telemetry/snapshot uploads from AI coding clients (zcode first).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
   "bin": {
     "asti": "src/cli/index.ts"
   },
