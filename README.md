@@ -83,6 +83,76 @@ node src/cli/index.ts doctor    # 自检环境（规则 / CA / 设置）
 C:\Users\<你>\.zcode\v2\checkpoints\*\state.json   →   lastAcceptedManifestHash 不再变化
 ```
 
+## 开机自启（推荐）
+
+**前提**：本工具是 **fail-closed** —— 代理不在时，客户端连不上服务器。
+所以若你长期保留接入，**代理必须常驻运行**。推荐配置为开机自启。
+
+### 安装（Windows，无需管理员权限）
+
+1. 确认系统 Node 存在（自启脚本用绝对路径，不依赖 PATH）：
+   ```
+   C:\Program Files\nodejs\node.exe
+   ```
+   若不在该位置，编辑 `scripts\asti-run.cmd` 里的 `NODE` 变量。
+
+2. 在「启动」文件夹创建指向隐藏启动器的快捷方式：
+
+   按 `Win+R` → 输入 `shell:startup` → 回车，会打开：
+   ```
+   C:\Users\<你>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup
+   ```
+   在里面新建一个快捷方式，目标填：
+   ```
+   wscript.exe "D:\AI safety terminal intercept\scripts\asti-hidden.vbs"
+   ```
+   起始位置填 `D:\AI safety terminal intercept`。
+
+   或用 PowerShell 一行创建：
+   ```powershell
+   $ws = New-Object -ComObject WScript.Shell
+   $s = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Startup')) 'ASTI.lnk'))
+   $s.TargetPath = 'wscript.exe'
+   $s.Arguments  = '"D:\AI safety terminal intercept\scripts\asti-hidden.vbs"'
+   $s.WorkingDirectory = 'D:\AI safety terminal intercept'
+   $s.Save()
+   ```
+
+3. 重启（或注销重登）验证：开机后代理应已自动运行。
+
+### 为什么不直接放 `.bat` 到启动文件夹
+
+直接放 `.cmd` 会在每次开机弹出一个黑色控制台窗口。`asti-hidden.vbs` 通过
+`WScript.Shell.Run(..., 0, False)` 以**隐藏窗口**启动，因此更干净。
+
+### 文件说明
+
+| 文件 | 作用 |
+|---|---|
+| `scripts\asti-run.cmd` | 实际运行器：定位系统 Node、`cd` 到仓库、启动代理、输出日志 |
+| `scripts\asti-hidden.vbs` | 隐藏窗口启动器，由「启动」文件夹的快捷方式调用 |
+
+### 日志与排障
+
+代理的所有输出写入：
+```
+C:\Users\<你>\.asti\asti.log
+```
+
+检查代理是否在运行（应有 `LISTENING`）：
+```
+netstat -ano | findstr :8787
+```
+日志中若出现 `EADDRINUSE`，说明已有一个代理实例在跑（通常无害）。
+
+### 卸载自启
+
+删除「启动」文件夹里的 `ASTI.lnk` 即可（`shell:startup` 打开该文件夹）。
+若要连代理配置一并还原，再执行：
+```
+node src/cli/index.ts unconfigure zcode
+```
+
 ## 安全声明（重要）
 
 MITM 代理本身是一种敏感能力。本工具通过设计约束来限制其被滥用：
@@ -119,7 +189,8 @@ docs/         设计文档
 **已知限制**
 - 仅支持显式代理接入（需客户端支持 `httpProxy` 类设置）。
 - 规则包目前只有 zcode。
-- 尚未在真实 zcode 上做人工端到端验收（GUI 无 CLI，需人工触发）。
+- 代理需常驻运行（fail-closed）；建议配置开机自启（见上）。
+- Phase 1 只覆盖 zcode 的快照上传端点；其它遥测端点需按需补充规则。
 
 **Phase 2 预告**
 - 透明代理接入（OS 重定向 + 系统 CA），使不支持代理设置的客户端也能被覆盖；
