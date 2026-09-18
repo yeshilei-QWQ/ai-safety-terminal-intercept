@@ -1,29 +1,32 @@
 # HANDOFF — 交接说明
 
 > 写给无上下文的后续会话（人或 AI）。所有关键事实已落字，不依赖此前对话记忆。
-> 最后更新：2026-09-18 · 状态：**Phase 1 完成并开源**
+> 最后更新：2026-09-18 · 状态：**Phase 1 完成、已开源、且已修复 fetch 绕过路径**
 
 ---
 
 ## 1. 这是什么 / 现在什么状态
 
 **ASTI**（AI Safety Terminal Intercept）是一个本地出口防火墙：按 `host + method + path`
-精准拦截 AI 编码客户端的**静默遥测/快照上传**，不误伤正常 API。首个规则包针对 **ZCode** 的静默仓库快照上传。
+精准拦截 AI 编码客户端的**静默遥测/快照上传**，不误伤正常 API。
+首个规则包针对 **ZCode** 的静默仓库快照上传。
 
 | 维度 | 现状 |
 |---|---|
 | Phase 1（显式代理接入） | ✅ 完成 |
-| 测试 | ✅ 32 passed（`npm test`） |
+| 绕过检测层（`asti watch`） | ✅ 完成 |
+| fetch 绕过路径修复（`asti launch`） | ✅ 完成（A/B 实测） |
+| 测试 | ✅ **61 passed**（`npm test`） |
 | 类型门禁 | ✅ `npx tsc --noEmit` exit 0 |
-| 真机验收 | ✅ 通过（拦截生效、模型不受影响） |
+| 真机验收 | ✅ 拦截生效、模型不受影响 |
 | 开源 | ✅ public，MIT |
 | Phase 2（透明代理） | ❌ 未开工 |
 | 其它客户端规则包 | ❌ 未开工（仅 zcode） |
 
-规模：`src/` 9 文件、`test/` 6 文件、约 1500 行。
+规模：`src/` 11 文件、`test/` 8 文件。
 
 **运行时前提（重要）**：本工具是 **fail-closed** —— 代理不在时，被接入的客户端连不上服务器。
-所以保留接入就必须让代理常驻。仓库提供三平台的开机自启配置（见 README）。
+保留接入就必须让代理常驻（仓库提供三平台开机自启配置）。
 
 ---
 
@@ -35,17 +38,23 @@ src/
     types.ts    Rule / RulePack / Decision 类型
     engine.ts   decide(host,method,path) 与 isTarget(host)
     load.ts     YAML → 编译正则；配置错误 fail-fast
-  ca/index.ts  根 CA 生成/复用 + 按 host 签发含 SAN 的 leaf + 合并 CA 包
+  ca/index.ts  根 CA 生成/复用 + 按 host 签发含 SAN 的 leaf
+               + writeMergedCaBundle（「系统根 + 自签 CA」合并包，**必需**，见 §5.1）
   proxy/
     server.ts      CONNECT 分流（targets→MITM，其余→透传）；仅监听 127.0.0.1
     mitm.ts        TLS 终止 + 规则决策 + 流式转发 + WS 升级透传
     passthrough.ts 纯隧道透传（必须缓存建连前的 ClientHello）
+  watch/     检测层 —— 「代理在跑」≠「拦截有效」，所以要有发现失效的能力
+    checkpoints.ts 读客户端 checkpoint 状态 + 比对（纯逻辑）
+    watcher.ts     轮询循环 + 基线持久化（跨重启仍能检出停机期间的绕过）
+  launch/    绕过路径修复 —— 用环境变量把 fetch 流量也纳入代理
+    index.ts       buildProxyEnv（纯函数）+ launchWithProxy
   adapters/explicit/zcode.ts  读写 zcode setting.json（attach 备份+写入 / detach 还原）
-  cli/index.ts  run / configure / unconfigure / rules / doctor
+  cli/index.ts  run / watch / launch / configure / unconfigure / rules / doctor
 rulepacks/zcode.yaml  规则包（拦截 upload-credential）
 test/                 单元 + e2e（e2e 不 mock 中间层：真 TLS 上游 + 真代理）
 verification/         设计期的假设验证脚本（见其 README）
-docs/superpowers/specs/2026-09-18--asti-design.md  设计文档（含证据表与反证章节）
+docs/superpowers/specs/2026-09-18--asti-design.md  设计文档（证据表 + 反证章节）
 ```
 
 **分层原则**：Core（Proxy/Rules/CA）与「接入方式」解耦。加客户端 = 加 rulepack；换接入方式 = 换 adapter。
@@ -56,23 +65,26 @@ docs/superpowers/specs/2026-09-18--asti-design.md  设计文档（含证据表�
 
 ```bash
 npm install
-npm test              # 32 tests，全绿
+npm test              # 61 tests，全绿
 npx tsc --noEmit      # 类型门禁
 
 node src/cli/index.ts doctor          # 自检（规则/CA/设置）
 node src/cli/index.ts rules           # 查看已加载规则
-node src/cli/index.ts run             # 启动代理（前台）
+node src/cli/index.ts run             # 启动代理（前台，**同时启动绕过检测**）
+node src/cli/index.ts launch <客户端exe>  # 用代理环境变量启动客户端（推荐，见 §5.8）
 node src/cli/index.ts configure zcode # 接入（备份并改写 zcode 设置）
 node src/cli/index.ts unconfigure zcode
+node src/cli/index.ts watch --once    # 单次绕过检查（有绕过则 exit 1，可接定时任务）
 ```
 
-**验证拦截真的生效**（不只看日志）：
+**验证拦截真的生效**（不要只看日志）：
 
 ```
 ~/.zcode/v2/checkpoints/*/state.json  →  lastAcceptedManifestHash 不再变化
 ```
 
-该字段只在上传被服务端**接受后**才写入，所以它是"是否真的传出去了"的可靠判据。
+该字段只在上传被服务端**接受后**才写入，所以它是「是否真的传出去了」的可靠判据。
+`asti watch` 就是盯这个字段。
 
 ---
 
@@ -86,7 +98,8 @@ node src/cli/index.ts unconfigure zcode
 | 采集器会包含根目录的 `.git` | 路径判定对 `.git` 直接 `include:true` |
 | MITM 能按路径拦而不误伤同域 | `verification/verify-e2e.mjs` 7/7（拦截/同域放行/异域透传/SSE 不缓冲） |
 | 静默响应能让客户端无感跳过 | `verification/verify-a4-silent.mjs` 3/3（用 asar 真实 `yme` 字节驱动） |
-| 真机端到端 | 代理日志 `BLOCK .../snapshot/upload-credential` ×3；checkpoints hash 未变；模型正常回复 |
+| `NODE_USE_ENV_PROXY=1` 能让 `fetch` 走代理 | A/B 实测：经 `asti launch` → BLOCK；不经 → 直连（真实服务端 404） |
+| 真机端到端 | 代理日志 `BLOCK .../snapshot/upload-credential`；checkpoints hash 未变；模型正常回复 |
 
 ---
 
@@ -95,7 +108,7 @@ node src/cli/index.ts unconfigure zcode
 1. **`httpProxyCaCertPath` 是替换式信任根，不是追加式。**
    只给自签 CA，真实证书域（如 `api.deepseek.com`）会 TLS 校验失败。
    必须给「系统根证书 + 自签 CA」**合并包**。已修（`writeMergedCaBundle`）并有回归测试。
-   *这个缺陷是自动化测试覆盖不到、只有真机验收才暴露的。*
+   *这个缺陷自动化测试覆盖不到，只有真机验收才暴露。*
 
 2. **MITM 分支必须先回写 `200 Connection Established`**，否则客户端一直等、连接挂起
    （表现为测试超时、无日志）。
@@ -113,12 +126,21 @@ node src/cli/index.ts unconfigure zcode
 7. **`git filter-branch` 必须配套清理** —— 它把原始历史存进 `refs/original/*`，
    不删则该数据仍可达。完整流程：filter-branch → 删 refs/original → reflog expire → gc prune。
 
+8. **`globalThis.fetch` 默认不经代理，但可用环境变量拉进来**（这条最关键）。
+   客户端对象上传走 `globalThis.fetch`，不读 httpProxy 设置 → 会绕过代理直连。
+   修复：`asti launch` 注入 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY` + `NODE_EXTRA_CA_CERTS`。
+   **前提**：客户端必须**由 `asti launch` 启动**；直接双击启动仍会绕过（靠 `asti watch` 发现）。
+
+9. **写测试夹具时小心 shell 转义**：bash 的 `echo` 会把 `\\` 处理成 `\`，
+   写出 `"D:\proj"` 这种**非法 JSON**，然后被生产代码按设计跳过 →
+   看起来像"模块有 bug"，实际是夹具坏了。用 Python/`json.dump` 写 JSON 夹具更稳。
+
 ---
 
 ## 6. 待办
 
 ### Phase 2：透明代理接入
-现有架构已预留 adapater 位置。透明代理需要 OS 级重定向（hosts/WFP）+ 系统根证书，
+现有架构已预留 adapter 位置。透明代理需要 OS 级重定向（hosts/WFP）+ 系统根证书，
 因此需要管理员权限、且是平台绑定的。客户端无感，能覆盖不支持代理设置的客户端。
 
 ### 更多规则包
@@ -126,21 +148,18 @@ node src/cli/index.ts unconfigure zcode
 声明 `targets`（需解密的域）+ `rules`（host/method/path/action/response）。
 建议先定位目标客户端的**遥测端点**（通常可在其二进制/日志中找到），再写规则。
 
-### 已知缺口（按重要性）
-
-1. ~~拦截是单点控制，存在未兜住的绕过路径~~ **已修复**。
-   原问题：对象上传用 `this.objectUploadFetch ?? globalThis.fetch`，而客户端构造时**没传**该选项
-   → 上传走 `globalThis.fetch`，默认**不经代理**。
-   **修复**：`asti launch <exe>` 注入 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY` + `NODE_EXTRA_CA_CERTS`
-   → Node 的 fetch 也走代理。A/B 对照实测已验证（经 launch → BLOCK；不经 → 绕过直连）。
-   **前提**：客户端必须**由 `asti launch` 启动**（继承环境变量）。若用户直接双击启动，
-   该路径仍会绕过 —— 此时靠检测层（`asti watch`）发现。
-2. 规则包只覆盖 zcode 的**一个**端点（快照上传凭据）；其它遥测端点未覆盖。
+### 已知缺口
+1. 规则包只覆盖 zcode 的**一个**端点（快照上传凭据）；其它遥测端点未覆盖。
+2. `asti launch` 是**前提依赖**：用户若直接双击启动客户端，fetch 绕过路径仍在
+   （此时只有检测层能发现，不能阻止）。
 3. Linux/macOS 的自启配置**已提供但未在目标平台实测**（作者只有 Windows 环境）。
 4. 代理无鉴权、无 TLS 客户端校验（仅监听 127.0.0.1，本机其它进程可访问该端口）。
 5. 无速率限制/连接数上限。
-6. Windows 上无法做真正的「进程级出口阻断」：需要管理员装防火墙规则，而防火墙规则
-   无法按域名过滤（上传目标域还是动态的）。因此路线是「环境变量注入 + 检测」，不是内核级拦截。
+6. **无法在 Windows 上做真正的「进程级出口阻断」**：需要管理员装防火墙规则，
+   而防火墙规则无法按域名过滤（上传目标域还是服务端动态下发的）。
+   所以路线是「环境变量注入 + 检测」，不是内核级拦截。
+7. **真机 GUI 验收未做**：`asti launch "…ZCode.exe"` 拉起真实客户端后
+   「可用且仍受保护」这一项没有实测（需要人在场确认 GUI 行为）。
 
 ---
 
@@ -151,13 +170,27 @@ node src/cli/index.ts unconfigure zcode
 - **双重用途**：这是 MITM 工具。README「安全声明」明确限定用途（保护自己的机器），
   改动不要把"仅解密指定域"这条限制放宽。
 - **测试纪律**：e2e 用例**不 mock 中间层**（真 TLS 上游 + 真代理）。
-  若把中间层 mock 掉，就再也测不到"MITM 握手/流式转发"这类真实故障。
+  若把中间层 mock 掉，就再也测不到「MITM 握手/流式转发」这类真实故障。
 - **Node ≥ 24**：依赖 `node --test` 原生跑 `.ts`，因此**没有构建步骤**（`package.json` engines 已声明）。
 
 ---
 
-## 8. 相关文档
+## 8. 交接纪律
 
-- 设计文档（含完整证据表、反证章节、开放问题）：`docs/superpowers/specs/2026-09-18--asti-design.md`
+- **先取证再动手**：`npm test` + `npx tsc --noEmit` 跑基线，确认起点是绿的。
+- **别凭记忆改文档里的"已验证"**：本仓库的设计文档有 A1–A8 断言表，
+  每条都标了状态和证据位置。改代码后要同步更新那张表。
+- **改拦截相关逻辑后，必须同时更新 `asti watch` 的判据**（若判据变了）。
+  检测层与拦截层是一对：拦截改了而检测没跟上，就会"以为在防、实际没防"。
+- **提改动前跑一次 A/B 思路检查**：这个改动是否可能让某类流量绕过代理？
+  若是，要么补 `launch` 的 env 覆盖，要么在断言表里如实标注为局限。
+- **提交前扫描公开安全**：仓库是 public。不要写入个人信息、本机绝对路径、密钥。
+  注意 `grep -E` 里 `\\` 的转义陷阱（见 §5.9），扫描报"干净"前先用已知串做阳性对照。
+
+---
+
+## 9. 相关文档
+
+- 设计文档（含完整证据表 A1–A8、反证章节、开放问题）：`docs/superpowers/specs/2026-09-18--asti-design.md`
 - 设计期验证脚本及其保真度说明：`verification/README.md`
 - 用户侧用法与各平台自启：`README.md`
