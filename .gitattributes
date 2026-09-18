@@ -1,0 +1,16 @@
+# Windows 批处理/脚本必须保持 CRLF，否则 cmd.exe/wscript 解析可能出错
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.vbs text eol=crlf
+
+# 其余源码/文档用 LF
+*.ts text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# 二进制
+*.pem binary
+*.key binary
