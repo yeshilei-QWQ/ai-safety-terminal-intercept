@@ -73,6 +73,20 @@
 
 服务端日志确认 CONNECT 分流与规则命中正常。**结论：纯 Node 实现 MITM + 按 host+path 精准拦截，技术可行。**
 
+### 2.3 端到端验证（不 mock 中间层）
+
+`verification/verify-e2e.mjs`：真起 TLS 上游 + 真起最小代理，7/7 PASS：
+
+| 用例 | 结果 |
+|---|---|
+| ① 命中规则 → 静默拦截 200，且上游未被触达 | PASS |
+| ② 同域其它路径（billing）→ 放行并真转发到上游 | PASS |
+| ③ 非 targets 域 → 纯隧道透传成功 | PASS |
+| ④ SSE 流式 → 增量转发（首块 134ms < 总时长 360ms，未缓冲） | PASS |
+
+并做**变异回归**：改掉拦截规则路径后 ① 的断言准确转红，还原后复绿——证明测试验证的是行为，非恒真。
+
+
 ---
 
 ## 3. 架构
@@ -265,8 +279,8 @@ README 将明确声明：**仅用于保护自己的机器、拦截自己的客�
 | A1：zcode 无开关可关上传 | 全量 schema 81 字段 grep，capture 路径不读任何 IndexingEnabled | ✅ 已验证（本地） |
 | A2：拦 `upload-credential` 即可断整链 | 读 `captureBeforePromptUnsafe`：credential 失败即 `return` | ✅ 代码已证；**待**端到端实测 |
 | A3：MITM 能按路径精准拦而不误伤同域 | 探针实测三例（拦截/同域放行/异域放行） | ✅ 已验证（本地探针） |
-| A4：`silent` 响应能让 zcode 静默跳过 | 解析逻辑已静态确认：`yme()` 对 `code!==0` 抛错、对 `!data` 返回 null（asar @254477877）→ 返回 `{"code":0}` 无 data 即得 null。仍需对真实 zcode 端到端实测 | ⚠️ **待验证**（Phase 1 首要验证项；解析前提已证） |
-| A5：显式代理接入后模型调用不受影响 | 接入后实测模型调用 | ⚠️ **待验证**（Phase 1 验收项） |
+| A4：`silent` 响应能让 zcode 静默跳过 | 原生代码验证：`verification/verify-a4-silent.mjs`（真实 `yme` 字节提取）→ 静默响应得 null、真实响应得 proceed、403 抛错，3/3 PASS | ✅ **已验证（本地）** |
+| A5：显式代理接入后模型调用不受影响 | 端到端：`verification/verify-e2e.mjs` 验证同域非拦截路径放行 + 异域透传 + SSE 流式不缓冲，全部 PASS | ✅ **已验证（本地代理链路）；真机 zcode 端到端待 Phase 1 验收** |
 
 > A4/A5 是 Phase 1 必须端到端验证的假设；在实现计划中作为独立的验证波次。
 > 若 A4 不成立（zcode 对无 data 响应仍重试/报错），降级方案为 `forbidden` 模式 + 客户端层面容忍。
@@ -275,8 +289,8 @@ README 将明确声明：**仅用于保护自己的机器、拦截自己的客�
 
 ## 13. 开放问题（实现前需收敛）
 
-1. `silent` 响应的精确 JSON 形态（`{"code":0}` 是否足够）需对真实 zcode 实测确认（见 A4）。
-2. WebSocket 升级（`wss://zcode.z.ai/ws` 远程控制）在 MITM 下的处理：Phase 1 对含 `Upgrade` 的请求**直接透传**（不拦截），避免破坏长连接。
+1. ~~`silent` 响应的精确 JSON 形态~~ **已收敛**：`{"code":0}`（无 data）经真实 `yme` 验证可得 null（见 A4）。
+2. WebSocket 升级（`wss://zcode.z.ai/ws` 远程控制）在 MITM 下的处理：Phase 1 对含 `Upgrade` 的请求**直接透传**（不拦截），避免破坏长连接。**待实现验证**。
 3. 多客户端 rulepack 的目录约定（Phase 1 仅 zcode，但目录结构预留）。
 
 ---
