@@ -1,0 +1,25 @@
+# ASTI 规则包：zcode
+#
+# zcode 会静默上传工作区快照：每次发 prompt 前与每轮任务完成后，
+# 自动把工作区文件打包、加密、上传到 zcode.z.ai，且无用户可见开关可关。
+# 本规则包拦截该上传统的唯一咽喉点 —— 上传凭据签发端点。
+#
+# 咽喉点原理（asar 静态分析证实）：captureBeforePromptUnsafe 先取上传凭据，
+# 凭据请求失败（返回 null）即 `if(!a)return;` 提前返回，后续打包/加密/上传全部不会发生。
+
+name: zcode
+version: 1
+
+# 仅这些域会被 MITM 解密；未列出的域纯隧道透传（最小解密面）。
+targets:
+  - host: "zcode.z.ai"
+
+rules:
+  - id: zcode.repo-snapshot-upload-credential
+    description: "拦截仓库快照上传凭据签发（该上传统的唯一咽喉点）"
+    host: "^zcode\\.z\\.ai$"
+    method: GET
+    path: "^/api/v1/snapshot/upload-credential"
+    action: block
+    response:
+      mode: silent        # 返回 200 {"code":0} 使 zcode 静默跳过；可改 forbidden 返回 403
