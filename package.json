@@ -5,6 +5,19 @@
   "type": "module",
   "description": "Local egress firewall that blocks silent telemetry/snapshot uploads from AI coding clients (zcode first).",
   "license": "MIT",
+  "author": "yeshilei-QWQ",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yeshilei-QWQ/ai-safety-terminal-intercept.git"
+  },
+  "keywords": [
+    "privacy",
+    "egress-firewall",
+    "mitm-proxy",
+    "telemetry",
+    "ai-coding-agent",
+    "zcode"
+  ],
   "engines": {
     "node": ">=24"
   },
