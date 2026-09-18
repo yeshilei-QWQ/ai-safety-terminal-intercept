@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# ASTI runtime state (MUST NOT be committed — contains CA private key)
+.asti/
+*.key
+*.pem
+!docs/**/*.pem
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log
