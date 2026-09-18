@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { rootCertificates } from "node:tls";
 import forge from "node-forge";
 
 /**
@@ -129,4 +130,23 @@ export class CertificateAuthority {
     this.#leafCache.set(host, leaf);
     return leaf;
   }
+}
+
+const BUNDLE_FILE = "ca-bundle.pem";
+
+/**
+ * 写出「系统根证书 + ASTI 根 CA」的合并包，返回其路径。
+ *
+ * 为什么需要合并包：真机验收发现，客户端把 httpProxyCaCertPath 用作**替换式**
+ * 信任根（而非追加）——若只给 ASTI CA，则 api.deepseek.com 这类真实证书域会
+ * TLS 校验失败（MODEL_TLS_VALIDATION_FAILED）。合并系统根后，两类域都能通过校验：
+ *   - 真实证书域 → 由系统根验证
+ *   - 被 MITM 的域（leaf 由 ASTI 签）→ 由 ASTI CA 验证
+ */
+export function writeMergedCaBundle(dir: string): string {
+  const ca = CertificateAuthority.load(dir);
+  const bundlePath = join(dir, BUNDLE_FILE);
+  const merged = [...rootCertificates, ca.caCertPem].join("\n");
+  writeFileSync(bundlePath, merged, { mode: 0o644 });
+  return bundlePath;
 }

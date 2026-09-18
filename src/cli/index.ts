@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { CertificateAuthority } from "../ca/index.ts";
+import { CertificateAuthority, writeMergedCaBundle } from "../ca/index.ts";
 import { RulesEngine } from "../rules/engine.ts";
 import { loadRulePack } from "../rules/load.ts";
 import { ProxyServer } from "../proxy/server.ts";
@@ -51,10 +51,9 @@ function loadRules(rulepackPath: string): RulesEngine {
 function ensureCaPemFile(): string {
   const dir = dataDir();
   mkdirSync(dir, { recursive: true });
-  const ca = CertificateAuthority.load(dir);
-  const pem = caPath();
-  writeFileSync(pem, ca.caCertPem, { mode: 0o644 });
-  return pem;
+  // 关键：给客户端的 CA 必须是「系统根 + ASTI CA」合并包。
+  // 客户端把它用作替换式信任根，单给 ASTI CA 会让真实证书域（如 api.deepseek.com）TLS 失败。
+  return writeMergedCaBundle(dir);
 }
 
 function cmdRules(rulepackPath: string): void {
